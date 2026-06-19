@@ -75,9 +75,8 @@ object SamsungBatteryHelper {
             intents.add(intent)
         }
 
-        // Include default settings screen for battery details as a fallback
-        intents.add(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.parse("package:${context.packageName}")
+        // Direct to Samsung specific ignore optimizations if possible
+        intents.add(getBatteryOptimizationSettingsIntent().apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         })
 

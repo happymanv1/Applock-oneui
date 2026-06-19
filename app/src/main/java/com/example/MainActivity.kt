@@ -25,6 +25,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -43,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -119,13 +121,6 @@ fun AppLockDashboard(viewModel: AppLockViewModel = viewModel()) {
         }
     }
 
-    // Standard Android Notification Request launcher
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasNotification = granted
-    }
-
     // Scroll offset detection for One UI 8.5 Collapsing giant header
     val lazyListState = rememberLazyListState()
     val collapsedProgress by remember {
@@ -137,21 +132,14 @@ fun AppLockDashboard(viewModel: AppLockViewModel = viewModel()) {
     }
 
     // Animate dimensions for collapsible header
-    val headerHeight = animateDpAsState(targetValue = if (collapsedProgress >= 0.9f) 56.dp else 180.dp)
-    val headerTitleSize = animateFloatAsState(targetValue = if (collapsedProgress >= 0.9f) 19f else 32f)
+    val headerHeight = animateDpAsState(targetValue = if (collapsedProgress >= 0.9f) 56.dp else 240.dp) // Large viewing area
+    val headerTitleSize = animateFloatAsState(targetValue = if (collapsedProgress >= 0.9f) 19f else 36f)
     val headerPaddingTop = animateDpAsState(targetValue = if (collapsedProgress >= 0.9f) 0.dp else 40.dp)
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                        MaterialTheme.colorScheme.background
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
     ) {
         // One UI Collapsible Header Title Block
         Box(
@@ -283,7 +271,11 @@ fun AppLockDashboard(viewModel: AppLockViewModel = viewModel()) {
                                     title = "Allow Notifications",
                                     desc = "Required to keep the App Lock background service alive.",
                                     onClick = {
-                                        notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                        androidx.core.app.ActivityCompat.requestPermissions(
+                                            context as androidx.fragment.app.FragmentActivity,
+                                            arrayOf("android.permission.POST_NOTIFICATIONS"),
+                                            101
+                                        )
                                     }
                                 )
                             }
@@ -495,9 +487,14 @@ fun AppLockDashboard(viewModel: AppLockViewModel = viewModel()) {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .shadow(1.dp, RoundedCornerShape(24.dp)),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f))
+                        .shadow(0.dp)
+                        .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                            shape = RoundedCornerShape(26.dp)
+                        ),
+                    shape = RoundedCornerShape(26.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.15f))
                 ) {
                     Column(
                         modifier = Modifier.padding(20.dp)
@@ -619,7 +616,8 @@ fun AppLockDashboard(viewModel: AppLockViewModel = viewModel()) {
                 dismissButton = {
                     TextButton(onClick = { showCustomTimerInput = false }) { Text("Cancel") }
                 },
-                shape = RoundedCornerShape(26.dp)
+                shape = RoundedCornerShape(26.dp),
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
             )
         } else {
             AlertDialog(
@@ -687,7 +685,8 @@ fun AppLockDashboard(viewModel: AppLockViewModel = viewModel()) {
                         Text("Cancel")
                     }
                 },
-                shape = RoundedCornerShape(26.dp) // Large rounded corners matching One UI 8.5 modals
+                shape = RoundedCornerShape(26.dp), // Large rounded corners matching One UI 8.5 modals
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
             )
         }
     }
@@ -745,31 +744,37 @@ fun AppLockRow(
     val pm = context.packageManager
 
     // Dynamic icon extraction loaded asynchronously safely and efficiently
-    val appIconDrawable = remember(appItem.packageName) {
-        try {
-            pm.getApplicationIcon(appItem.packageName)
-        } catch (e: Exception) {
-            null
+    var iconBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(appItem.packageName) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val appIconDrawable = pm.getApplicationIcon(appItem.packageName)
+                iconBitmap = appIconDrawable.toBitmap().asImageBitmap()
+            } catch (e: Exception) {
+                // Ignore
+            }
         }
     }
 
-    val iconBitmap = remember(appIconDrawable) {
-        appIconDrawable?.toBitmap()?.asImageBitmap()
-    }
-
-    Card(
+        Card(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(0.5.dp, RoundedCornerShape(20.dp)),
-        shape = RoundedCornerShape(20.dp),
+            .shadow(0.dp) // Removed heavy shadow for glass look
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                shape = RoundedCornerShape(26.dp)
+            ),
+        shape = RoundedCornerShape(26.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (appItem.isLocked) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+            containerColor = if (appItem.isLocked) MaterialTheme.colorScheme.surface.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.05f)
         )
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(20.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -777,16 +782,17 @@ fun AppLockRow(
                 // One UI Squircle App Icon Mask Frame
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(13.dp)) // squircle shape ratio
+                        .size(54.dp)
+                        .clip(RoundedCornerShape(18.dp)) // squircle shape ratio
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (iconBitmap != null) {
+                    val currentIcon = iconBitmap
+                    if (currentIcon != null) {
                         Image(
-                            bitmap = iconBitmap,
+                            bitmap = currentIcon,
                             contentDescription = appItem.appName,
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(40.dp)
                         )
                     } else {
                         Icon(
@@ -798,12 +804,12 @@ fun AppLockRow(
                     }
                 }
 
-                Spacer(modifier = Modifier.width(14.dp))
+                Spacer(modifier = Modifier.width(16.dp))
 
                 Column {
                     Text(
                         text = appItem.appName,
-                        fontSize = 15.sp,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,

@@ -113,7 +113,19 @@ class AppLockViewModel(application: Application) : AndroidViewModel(application)
                         addCategory(Intent.CATEGORY_LAUNCHER)
                     }
 
-                    val resolveInfos = packageManager.queryIntentActivities(mainIntent, 0)
+                    val flags = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                        PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong())
+                    } else {
+                        @Suppress("DEPRECATION")
+                        PackageManager.MATCH_ALL
+                    }
+
+                    val resolveInfos = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                        packageManager.queryIntentActivities(mainIntent, flags as PackageManager.ResolveInfoFlags)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        packageManager.queryIntentActivities(mainIntent, flags as Int)
+                    }
                     resolveInfos.mapNotNull { info ->
                         val pkg = info.activityInfo.packageName
                         // Avoid locking ourselves
