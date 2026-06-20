@@ -41,9 +41,12 @@ class AuthenticationActivity : FragmentActivity() {
     companion object {
         const val TAG = "AuthenticationActivity"
         const val EXTRA_TARGET_PACKAGE = "target_package"
+        const val EXTRA_ACTION = "extra_action"
+        const val ACTION_TOGGLE_PAUSE = "action_toggle_pause"
     }
 
     private var targetPackage: String? = null
+    private var actionState: String? = null
     private var appLabel: String = "Secure Application"
     private var appIcon: Drawable? = null
     private lateinit var executor: Executor
@@ -52,17 +55,33 @@ class AuthenticationActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Fast animation
+        @Suppress("DEPRECATION")
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            overrideActivityTransition(OVERRIDE_TRANSITION_OPEN, com.example.R.anim.fast_fade_in, com.example.R.anim.fast_fade_out)
+        } else {
+            overridePendingTransition(com.example.R.anim.fast_fade_in, com.example.R.anim.fast_fade_out)
+        }
+        
         enableEdgeToEdge()
 
         targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE)
-        if (targetPackage == null) {
-            Log.e(TAG, "Authentication launched without target package. Exiting.")
+        actionState = intent.getStringExtra(EXTRA_ACTION)
+        
+        if (targetPackage == null && actionState != ACTION_TOGGLE_PAUSE) {
+            Log.e(TAG, "Authentication launched without valid target. Exiting.")
             redirectHome()
             finish()
             return
         }
 
-        loadAppMetadata()
+        if (actionState == ACTION_TOGGLE_PAUSE) {
+            appLabel = "AppLock Settings"
+        } else {
+            loadAppMetadata()
+        }
+        
         setupBiometricPrompt()
 
         setContent {
@@ -133,9 +152,25 @@ class AuthenticationActivity : FragmentActivity() {
     }
 
     private fun onAuthSuccess() {
-        targetPackage?.let { pkg ->
-            // Update in-memory service records so the user isn't prompted repeatedly during this active state
-            AppLockService.markAsUnlocked(pkg)
+        if (actionState == ACTION_TOGGLE_PAUSE) {
+            com.example.service.AppLockTileService.isPaused = !com.example.service.AppLockTileService.isPaused
+            
+            // Trigger Widget Update
+            val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(this)
+            val componentName = android.content.ComponentName(this, com.example.service.AppLockWidgetProvider::class.java)
+            val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
+            if (appWidgetIds.isNotEmpty()) {
+                val updateIntent = Intent(this, com.example.service.AppLockWidgetProvider::class.java).apply {
+                    action = android.appwidget.AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                    putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_IDS, appWidgetIds)
+                }
+                sendBroadcast(updateIntent)
+            }
+        } else {
+            targetPackage?.let { pkg ->
+                // Update in-memory service records so the user isn't prompted repeatedly during this active state
+                AppLockService.markAsUnlocked(pkg)
+            }
         }
         AppLockService.currentlyAuthenticatingPackage = null
         finish()
@@ -143,7 +178,9 @@ class AuthenticationActivity : FragmentActivity() {
 
     private fun onAuthFailure() {
         AppLockService.currentlyAuthenticatingPackage = null
-        redirectHome()
+        if (actionState != ACTION_TOGGLE_PAUSE) {
+            redirectHome()
+        }
         finish()
     }
 
@@ -154,6 +191,16 @@ class AuthenticationActivity : FragmentActivity() {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         startActivity(homeIntent)
+    }
+
+    override fun finish() {
+        super.finish()
+        @Suppress("DEPRECATION")
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, com.example.R.anim.fast_fade_in, com.example.R.anim.fast_fade_out)
+        } else {
+            overridePendingTransition(com.example.R.anim.fast_fade_in, com.example.R.anim.fast_fade_out)
+        }
     }
 
     override fun onDestroy() {

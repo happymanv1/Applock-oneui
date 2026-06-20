@@ -16,7 +16,7 @@ import com.example.R
 import com.example.data.AppLockDatabase
 import com.example.data.AppLockRepository
 import com.example.data.LockedApp
-import com.example.service.AppLockService.Companion.unlockedPackages
+import com.example.service.AppLockService.Companion.unlockedStates
 import com.example.ui.AuthenticationActivity
 import kotlinx.coroutines.*
 
@@ -35,10 +35,14 @@ class AppLockService : Service() {
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == Intent.ACTION_SCREEN_OFF) {
-                Log.d(TAG, "Screen off. Resetting all unlock timers.")
-                synchronized(unlockedPackages) {
-                    unlockedPackages.clear()
+                Log.d(TAG, "Screen off. Resetting all unlock states.")
+                synchronized(unlockedStates) {
+                    unlockedStates.clear()
                 }
+                synchronized(packageBackgroundTimes) {
+                    packageBackgroundTimes.clear()
+                }
+                lastForegroundPackage = null // Force a transition check when screen turns back on
             }
         }
     }
@@ -48,9 +52,11 @@ class AppLockService : Service() {
         private const val NOTIFICATION_ID = 8522
         private const val CHANNEL_ID = "app_lock_service_channel"
 
-        // Holds in-memory record of unlocked packages with their last active and unlock timestamps
-        // Map: PackageName -> (unlockTimeMillis)
-        val unlockedPackages = HashMap<String, Long>()
+        // Holds in-memory record of unlocked packages
+        val unlockedStates = HashSet<String>()
+        
+        // Map: PackageName -> Time it went to the background
+        val packageBackgroundTimes = HashMap<String, Long>()
 
         // Tracks which app is currently undergoing biometric authentication to avoid launching multiple prompts
         @Volatile
@@ -60,10 +66,13 @@ class AppLockService : Service() {
          * Helper to register package as successfully unlocked.
          */
         fun markAsUnlocked(packageName: String) {
-            synchronized(unlockedPackages) {
-                unlockedPackages[packageName] = System.currentTimeMillis()
-                Log.d(TAG, "Package unlocked in-memory: $packageName at ${unlockedPackages[packageName]}")
+            synchronized(unlockedStates) {
+                unlockedStates.add(packageName)
             }
+            synchronized(packageBackgroundTimes) {
+                packageBackgroundTimes.remove(packageName)
+            }
+            Log.d(TAG, "Package unlocked in-memory: $packageName")
         }
     }
 
@@ -167,14 +176,25 @@ class AppLockService : Service() {
                 delay(500) // Poll foreground app state every 500ms
                 try {
                     val currentForeground = getForegroundPackageName() ?: continue
-                    if (currentForeground == packageName || currentForeground == homePackageName) {
-                        // User is in our settings screen or on launcher home, update state but don't prompt
-                        lastForegroundPackage = currentForeground
-                        continue
-                    }
-
+                    
                     if (currentForeground != lastForegroundPackage) {
                         Log.v(TAG, "App shift detected: $lastForegroundPackage -> $currentForeground")
+                        
+                        // We left the previous app, record its background time
+                        if (lastForegroundPackage != null && 
+                            lastForegroundPackage != packageName && 
+                            lastForegroundPackage != homePackageName) {
+                            synchronized(packageBackgroundTimes) {
+                                packageBackgroundTimes[lastForegroundPackage!!] = System.currentTimeMillis()
+                            }
+                        }
+                        
+                        if (currentForeground == packageName || currentForeground == homePackageName) {
+                            // User is in our app or on launcher home, update state but don't prompt
+                            lastForegroundPackage = currentForeground
+                            continue
+                        }
+
                         checkAndLockPackage(currentForeground)
                     }
 
@@ -187,6 +207,9 @@ class AppLockService : Service() {
     }
 
     private suspend fun checkAndLockPackage(packageName: String) {
+        if (com.example.service.AppLockTileService.isPaused) {
+            return
+        }
         val matchedApp = repository.getAppByPackageName(packageName)
         if (matchedApp != null && matchedApp.isLocked) {
             val isBypassed = shouldBypassLock(matchedApp)
@@ -200,36 +223,56 @@ class AppLockService : Service() {
     }
 
     private fun shouldBypassLock(app: LockedApp): Boolean {
-        synchronized(unlockedPackages) {
-            val unlockTime = unlockedPackages[app.packageName] ?: return false
-            val elapsed = System.currentTimeMillis() - unlockTime
+        synchronized(unlockedStates) {
+            if (!unlockedStates.contains(app.packageName)) {
+                return false // Never unlocked in this session
+            }
+
+            // It was unlocked previously. Check if the grace period has expired since it went to background.
+            val bgTime = synchronized(packageBackgroundTimes) { packageBackgroundTimes[app.packageName] }
+            
+            if (bgTime == null) {
+                // If there's no background time recorded, it implies it hasn't properly gone to background
+                // or we just returned to it from Auth. It's considered "actively unlocked".
+                return true
+            }
+
+            val elapsedSinceBg = System.currentTimeMillis() - bgTime
 
             if (app.reLockOption.startsWith("After") && app.reLockOption.endsWith("minutes")) {
                 try {
                     val minutesStr = app.reLockOption.removePrefix("After ").removeSuffix(" minutes").trim()
                     val minutes = minutesStr.toInt()
-                    return elapsed < (minutes * 60 * 1000L)
+                    if (elapsedSinceBg < (minutes * 60 * 1000L)) {
+                        return true
+                    }
                 } catch (e: Exception) {
-                    return elapsed < 2000
+                    if (elapsedSinceBg < 2000) return true
+                }
+            } else {
+                when (app.reLockOption) {
+                    "Immediately" -> {
+                        // Tiny grace period for system transition bounces
+                        if (elapsedSinceBg < 1000) return true
+                    }
+                    "After 1 minute" -> {
+                        if (elapsedSinceBg < 60000) return true
+                    }
+                    "Re-lock on screen off" -> {
+                        return true
+                    }
+                    else -> {
+                        if (elapsedSinceBg < 2000) return true
+                    }
                 }
             }
-
-            return when (app.reLockOption) {
-                "Immediately" -> {
-                    // With "Immediately", once the user navigates away from the app (even momentarily), we require unlock.
-                    // However, we allow a tolerance window of 3 seconds initially upon authentication back-to-back configuration
-                    // to prevent loop-stacking due to delayed OS focus reports.
-                    elapsed < 3000
-                }
-                "After 1 minute" -> {
-                    elapsed < 60000
-                }
-                "Re-lock on screen off" -> {
-                    // Stays unlocked in-memory until screen off event resets the maps
-                    true
-                }
-                else -> elapsed < 2000 // immediate safe baseline
+            
+            // If we reach here, the grace period has expired.
+            unlockedStates.remove(app.packageName)
+            synchronized(packageBackgroundTimes) {
+                packageBackgroundTimes.remove(app.packageName)
             }
+            return false
         }
     }
 

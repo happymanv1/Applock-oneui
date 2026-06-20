@@ -54,6 +54,28 @@
                 android:value="App Lock service that monitors foreground applications to secure private apps." />
         </service>
 
+        <service
+            android:name=".service.AppLockTileService"
+            android:exported="true"
+            android:label="AppLock Toggle"
+            android:icon="@drawable/ic_custom_icon"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".service.AppLockWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/app_widget_info" />
+        </receiver>
+
     </application>
 
 </manifest>

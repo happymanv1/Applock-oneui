@@ -48,8 +48,8 @@ private val SamsungLightColorScheme = lightColorScheme(
 @Composable
 fun MyApplicationTheme(
   darkTheme: Boolean = isSystemInDarkTheme(),
-  // Disabling dynamic colors to force One UI style, or you can leave it enabled
-  dynamicColor: Boolean = false,
+  // Enable Material You dynamic colors
+  dynamicColor: Boolean = true,
   content: @Composable () -> Unit,
 ) {
   val colorScheme =
